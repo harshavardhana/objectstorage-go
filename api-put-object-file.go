@@ -167,87 +167,114 @@ func (c Client) putObjectMultipartFromFile(bucketName, objectName string, fileRe
 	}
 
 	// Calculate the optimal parts info for a given size.
-	totalPartsCount, partSize, _, err := optimalPartInfo(fileSize)
+	totalPartsCount, partSize, lastPartSize, err := optimalPartInfo(fileSize)
 	if err != nil {
 		return 0, err
 	}
 
-	// Used for readability, lastPartNumber is always totalPartsCount.
+	// Create a channel to communicate a part was uploaded.
+	// Buffer this to 10000, the maximum number of parts allowed by S3.
+	uploadedPartsCh := make(chan uploadedPartRes, 10000)
+
+	// Create a channel to communicate which part to upload.
+	// Buffer this to 10000, the maximum number of parts allowed by S3.
+	uploadPartsCh := make(chan int, 10000)
+
+	// Just for readability.
 	lastPartNumber := totalPartsCount
 
-	// Part number always starts with '1'.
-	partNumber := 1
+	// Use three 'workers' to upload parts in parallel.
+	for w := 1; w <= 3; w++ {
+		go func() {
+			// Deal with each part as it comes through the channel.
+			for partNumber := range uploadPartsCh {
+				// Get a section reader on a particular offset.
+				sectionReader := io.NewSectionReader(fileReader, totalUploadedSize, partSize)
 
-	for partNumber <= lastPartNumber {
-		// Get a section reader on a particular offset.
-		sectionReader := io.NewSectionReader(fileReader, totalUploadedSize, partSize)
+				// Add hash algorithms that need to be calculated by computeHash()
+				// In case of a non-v4 signature or https connection, sha256 is not needed.
+				hashAlgos := make(map[string]hash.Hash)
+				hashSums := make(map[string][]byte)
+				hashAlgos["md5"] = md5.New()
+				if c.signature.isV4() && !c.secure {
+					hashAlgos["sha256"] = sha256.New()
+				}
 
-		// Add hash algorithms that need to be calculated by computeHash()
-		// In case of a non-v4 signature or https connection, sha256 is not needed.
-		hashAlgos := make(map[string]hash.Hash)
-		hashSums := make(map[string][]byte)
-		hashAlgos["md5"] = md5.New()
-		if c.signature.isV4() && !c.secure {
-			hashAlgos["sha256"] = sha256.New()
+				// Create the part to be uploaded.
+				verifyObjPart := objectPart{
+					ETag:       hex.EncodeToString(hashSums["md5"]),
+					PartNumber: partNumber,
+					Size:       partSize,
+				}
+				// If this is the last part do not give it the full part size.
+				if partNumber == lastPartNumber {
+					verifyObjPart.Size = lastPartSize
+				}
+
+				var prtSize int64
+				prtSize, err = computeHash(hashAlgos, hashSums, sectionReader)
+				if err != nil {
+					uploadedPartsCh <- uploadedPartRes{
+						error: err,
+					}
+					// Exit the goroutine.
+					return
+				}
+
+				// Verify if part should be uploaded.
+				if shouldUploadPart(verifyObjPart, partsInfo) {
+					// Proceed to upload the part.
+					var objPart objectPart
+					objPart, err = c.uploadPart(bucketName, objectName, uploadID, sectionReader, partNumber, hashSums["md5"], hashSums["sha256"], prtSize)
+					if err != nil {
+						uploadedPartsCh <- uploadedPartRes{
+							error: err,
+						}
+						// Exit the goroutine.
+						return
+					}
+					// Save successfully uploaded part metadata.
+					partsInfo[partNumber] = objPart
+				}
+				// Return through the channel the part size.
+				uploadedPartsCh <- uploadedPartRes{verifyObjPart, nil}
+			}
+		}()
+	}
+
+	// Send each part through the partUploadCh to be uploaded.
+	for p := 1; p <= totalPartsCount; p++ {
+		uploadPartsCh <- p
+	}
+	close(uploadPartsCh)
+
+	// Retrieve each uploaded part once it is done.
+	for u := 1; u <= totalPartsCount; u++ {
+		uploadRes := <-uploadedPartsCh
+		if uploadRes.error != nil {
+			return totalUploadedSize, uploadRes.error
 		}
-
-		var prtSize int64
-		prtSize, err = computeHash(hashAlgos, hashSums, sectionReader)
-		if err != nil {
-			return 0, err
-		}
-
-		var reader io.Reader
-		// Update progress reader appropriately to the latest offset
-		// as we read from the source.
-		reader = newHook(sectionReader, progress)
-
-		// Verify if part should be uploaded.
-		if shouldUploadPart(objectPart{
-			ETag:       hex.EncodeToString(hashSums["md5"]),
-			PartNumber: partNumber,
-			Size:       prtSize,
-		}, partsInfo) {
-			// Proceed to upload the part.
-			var objPart objectPart
-			objPart, err = c.uploadPart(bucketName, objectName, uploadID, reader, partNumber,
-				hashSums["md5"], hashSums["sha256"], prtSize)
-			if err != nil {
+		// Update the total uploaded size.
+		totalUploadedSize += uploadRes.Size
+		// Update the progress bar if there is one.
+		if progress != nil {
+			if _, err = io.CopyN(ioutil.Discard, progress, uploadRes.Size); err != nil {
 				return totalUploadedSize, err
 			}
-			// Save successfully uploaded part metadata.
-			partsInfo[partNumber] = objPart
-		} else {
-			// Update the progress reader for the skipped part.
-			if progress != nil {
-				if _, err = io.CopyN(ioutil.Discard, progress, prtSize); err != nil {
-					return totalUploadedSize, err
-				}
-			}
 		}
-
-		// Save successfully uploaded size.
-		totalUploadedSize += prtSize
-
-		// Increment part number.
-		partNumber++
-	}
-
-	// Verify if we uploaded all data.
-	if totalUploadedSize != fileSize {
-		return totalUploadedSize, ErrUnexpectedEOF(totalUploadedSize, fileSize, bucketName, objectName)
-	}
-
-	// Loop over uploaded parts to save them in a Parts array before completing the multipart request.
-	for i := 1; i <= lastPartNumber; i++ {
-		part, ok := partsInfo[i]
+		part, ok := partsInfo[uploadRes.PartNumber]
 		if !ok {
-			return totalUploadedSize, ErrInvalidArgument(fmt.Sprintf("Missing part number %d", i))
+			return totalUploadedSize, ErrInvalidArgument(fmt.Sprintf("Missing part number %d", uploadRes.PartNumber))
 		}
 		complMultipartUpload.Parts = append(complMultipartUpload.Parts, completePart{
 			ETag:       part.ETag,
 			PartNumber: part.PartNumber,
 		})
+	}
+
+	// Verify if we uploaded all data.
+	if totalUploadedSize != fileSize {
+		return totalUploadedSize, ErrUnexpectedEOF(totalUploadedSize, fileSize, bucketName, objectName)
 	}
 
 	// Sort all completed parts.
