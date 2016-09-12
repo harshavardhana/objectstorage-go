@@ -174,11 +174,11 @@ func (c Client) putObjectMultipartFromFile(bucketName, objectName string, fileRe
 
 	// Create a channel to communicate a part was uploaded.
 	// Buffer this to 10000, the maximum number of parts allowed by S3.
-	uploadedPartsCh := make(chan uploadedPartRes, 10000)
+	uploadedPartsCh := make(chan uploadedPartRes, maxPartsCount)
 
 	// Create a channel to communicate which part to upload.
 	// Buffer this to 10000, the maximum number of parts allowed by S3.
-	uploadPartsCh := make(chan int, 10000)
+	uploadPartsCh := make(chan int, maxPartsCount)
 
 	// Just for readability.
 	lastPartNumber := totalPartsCount
@@ -246,9 +246,11 @@ func (c Client) putObjectMultipartFromFile(bucketName, objectName string, fileRe
 	for p := 1; p <= totalPartsCount; p++ {
 		uploadPartsCh <- p
 	}
+	// Close here closes the worker go-routines.
 	close(uploadPartsCh)
 
-	// Retrieve each uploaded part once it is done.
+	// Gather the responses as they occur and update any progress bar.
+	complMultipartUpload.Parts = make([]completePart, totalPartsCount)
 	for u := 1; u <= totalPartsCount; u++ {
 		uploadRes := <-uploadedPartsCh
 		if uploadRes.error != nil {
@@ -266,10 +268,11 @@ func (c Client) putObjectMultipartFromFile(bucketName, objectName string, fileRe
 		if !ok {
 			return totalUploadedSize, ErrInvalidArgument(fmt.Sprintf("Missing part number %d", uploadRes.PartNumber))
 		}
-		complMultipartUpload.Parts = append(complMultipartUpload.Parts, completePart{
+		// Store the parts to be completed in order.
+		complMultipartUpload.Parts[uploadRes.PartNumber-1] = completePart{
 			ETag:       part.ETag,
 			PartNumber: part.PartNumber,
-		})
+		}
 	}
 
 	// Verify if we uploaded all data.

@@ -103,28 +103,27 @@ func (c Client) putObjectMultipartFromReadAt(bucketName, objectName string, read
 	readAtBuffer := make([]byte, optimalReadBufferSize)
 
 	// Declare a channel that sends the next part number to be uploaded.
-	// Buffered to 10000 because thats the maximum number of parts allowed
-	// by S3.
-	uploadPartsCh := make(chan int, 10000)
+	// Buffered to 10000 because thats the maximum number of parts allowed by S3.
+	uploadPartsCh := make(chan int, maxPartsCount)
 
 	// Declare a channel that sends back the response of a part upload.
-	// Buffered to 10000 because thats the maximum number of parts allowed
-	// by S3.
-	uploadedPartsCh := make(chan uploadedPartRes, 10000)
+	// Buffered to 10000 because thats the maximum number of parts allowed by S3.
+	uploadedPartsCh := make(chan uploadedPartRes, maxPartsCount)
 
 	// Receive each part number from the channel allowing three parallel uploads.
 	for w := 1; w <= 3; w++ {
 		go func() {
+			// Declare a new tmpBuffer.
+			tmpBuffer := new(bytes.Buffer)
+
 			// TODO: decide which part this is based on the offset.
 			for partNumber := range uploadPartsCh {
-				// Declare a  new tmpBuffer.
-				tmpBuffer := new(bytes.Buffer)
-
 				// Verify object if its uploaded.
 				verifyObjPart := objectPart{
 					PartNumber: partNumber,
 					Size:       partSize,
 				}
+
 				// Special case if we see a last part number, save last part
 				// size as the proper part size.
 				if partNumber == lastPartNumber {
@@ -187,6 +186,9 @@ func (c Client) putObjectMultipartFromReadAt(bucketName, objectName string, read
 				}
 				// Send successful part info through the channel.
 				uploadedPartsCh <- uploadedPartRes{verifyObjPart, nil}
+
+				// Reset buffer for re-use.
+				tmpBuffer.Reset()
 			}
 		}()
 	}
@@ -197,8 +199,7 @@ func (c Client) putObjectMultipartFromReadAt(bucketName, objectName string, read
 	}
 	close(uploadPartsCh)
 
-	// Gather the responses as they occur and update any
-	// progress bar.
+	// Gather the responses as they occur and update any progress bar.
 	complMultipartUpload.Parts = make([]completePart, totalPartsCount)
 	for u := 1; u <= totalPartsCount; u++ {
 		uploadRes := <-uploadedPartsCh
@@ -219,7 +220,7 @@ func (c Client) putObjectMultipartFromReadAt(bucketName, objectName string, read
 			return 0, ErrInvalidArgument(fmt.Sprintf("Missing part number %d", uploadRes.PartNumber))
 		}
 		// Store the parts to be completed in order.
-		complMultipartUpload.Parts[uploadRes.PartNum-1] = completePart{
+		complMultipartUpload.Parts[uploadRes.PartNumber-1] = completePart{
 			ETag:       part.ETag,
 			PartNumber: part.PartNumber,
 		}
