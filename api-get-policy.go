@@ -44,7 +44,7 @@ func (c Client) GetBucketPolicy(bucketName, objectPrefix string) (bucketPolicy p
 		}
 		return policy.BucketPolicyNone, err
 	}
-	return policy.GetPolicy(policyInfo.Statements, bucketName, objectPrefix), nil
+	return policy.GetPolicy(policyInfo.Statements, bucketName, objectPrefix, "*"), nil
 }
 
 // ListBucketPolicies - list all policies for a given prefix and all its children.
@@ -64,7 +64,7 @@ func (c Client) ListBucketPolicies(bucketName, objectPrefix string) (bucketPolic
 		}
 		return map[string]policy.BucketPolicy{}, err
 	}
-	return policy.GetPolicies(policyInfo.Statements, bucketName), nil
+	return policy.GetPolicies(policyInfo.Statements, bucketName, "*"), nil
 }
 
 // Default empty bucket access policy.

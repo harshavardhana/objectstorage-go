@@ -102,7 +102,7 @@ func TestIsValidStatement(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		if result := isValidStatement(testCase.statement, testCase.bucketName); result != testCase.expectedResult {
+		if result := isValidStatement(testCase.statement, testCase.bucketName, "*"); result != testCase.expectedResult {
 			t.Fatalf("%+v: expected: %t, got: %t", testCase, testCase.expectedResult, result)
 		}
 	}
@@ -151,7 +151,7 @@ func TestNewStatements(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		statements := newStatements(testCase.policy, testCase.bucketName, testCase.prefix)
+		statements := newStatements(testCase.policy, testCase.bucketName, testCase.prefix, "*")
 		if data, err := json.Marshal(statements); err == nil {
 			if string(data) != testCase.expectedResult {
 				t.Fatalf("%+v: expected: %s, got: %s", testCase, testCase.expectedResult, string(data))
@@ -910,7 +910,7 @@ func TestRemoveStatements(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		statements := removeStatements(testCase.statements, testCase.bucketName, testCase.prefix)
+		statements := removeStatements(testCase.statements, testCase.bucketName, testCase.prefix, "*")
 		if data, err := json.Marshal(statements); err != nil {
 			t.Fatalf("unable encoding to json, %s", err)
 		} else if string(data) != testCase.expectedResult {
@@ -1306,7 +1306,7 @@ func TestGetBucketPolicy(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		commonFound, readOnly, writeOnly := getBucketPolicy(testCase.statement, testCase.prefix)
+		commonFound, readOnly, writeOnly := getBucketPolicy(testCase.statement, testCase.prefix, "*")
 		if !(testCase.expectedResult1 == commonFound && testCase.expectedResult2 == readOnly && testCase.expectedResult3 == writeOnly) {
 			t.Fatalf("%+v: expected: [%t,%t,%t], got: [%t,%t,%t]", testCase,
 				testCase.expectedResult1, testCase.expectedResult2, testCase.expectedResult3,
@@ -1368,7 +1368,7 @@ func TestGetObjectPolicy(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		readOnly, writeOnly := getObjectPolicy(testCase.statement)
+		readOnly, writeOnly := getObjectPolicy(testCase.statement, "*")
 		if !(testCase.expectedResult1 == readOnly && testCase.expectedResult2 == writeOnly) {
 			t.Fatalf("%+v: expected: [%t,%t], got: [%t,%t]", testCase,
 				testCase.expectedResult1, testCase.expectedResult2,
@@ -1468,7 +1468,7 @@ func TestListBucketPolicies(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		policyRules := GetPolicies(testCase.statements, testCase.bucketName)
+		policyRules := GetPolicies(testCase.statements, testCase.bucketName, "*")
 		if !reflect.DeepEqual(testCase.expectedResult, policyRules) {
 			t.Fatalf("%+v:\n expected: %+v, got: %+v", testCase, testCase.expectedResult, policyRules)
 		}
@@ -1604,7 +1604,7 @@ func TestGetPolicy(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		policy := GetPolicy(testCase.statements, testCase.bucketName, testCase.prefix)
+		policy := GetPolicy(testCase.statements, testCase.bucketName, testCase.prefix, "*")
 		if testCase.expectedResult != policy {
 			t.Fatalf("%+v: expected: %s, got: %s", testCase, testCase.expectedResult, policy)
 		}
@@ -1731,7 +1731,7 @@ func TestSetPolicy(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		statements := SetPolicy(testCase.statements, testCase.policy, testCase.bucketName, testCase.prefix)
+		statements := SetPolicy(testCase.statements, testCase.policy, testCase.bucketName, testCase.prefix, "*")
 		if data, err := json.Marshal(statements); err != nil {
 			t.Fatalf("unable encoding to json, %s", err)
 		} else if string(data) != testCase.expectedResult {

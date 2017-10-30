@@ -132,7 +132,7 @@ func (c Client) SetBucketPolicy(bucketName string, objectPrefix string, bucketPo
 		return nil
 	}
 
-	policyInfo.Statements = policy.SetPolicy(policyInfo.Statements, bucketPolicy, bucketName, objectPrefix)
+	policyInfo.Statements = policy.SetPolicy(policyInfo.Statements, bucketPolicy, bucketName, objectPrefix, "*")
 
 	// Save the updated policies.
 	return c.putBucketPolicy(bucketName, policyInfo)

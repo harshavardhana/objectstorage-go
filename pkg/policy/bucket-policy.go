@@ -98,7 +98,7 @@ type BucketAccessPolicy struct {
 }
 
 // isValidStatement - returns whether given statement is valid to process for given bucket name.
-func isValidStatement(statement Statement, bucketName string) bool {
+func isValidStatement(statement Statement, bucketName string, user string) bool {
 	if statement.Actions.Intersection(validActions).IsEmpty() {
 		return false
 	}
@@ -107,7 +107,7 @@ func isValidStatement(statement Statement, bucketName string) bool {
 		return false
 	}
 
-	if statement.Principal.AWS == nil || !statement.Principal.AWS.Contains("*") {
+	if statement.Principal.AWS == nil || !statement.Principal.AWS.Contains(user) {
 		return false
 	}
 
@@ -124,7 +124,7 @@ func isValidStatement(statement Statement, bucketName string) bool {
 }
 
 // Returns new statements with bucket actions for given policy.
-func newBucketStatement(policy BucketPolicy, bucketName string, prefix string) (statements []Statement) {
+func newBucketStatement(policy BucketPolicy, bucketName string, prefix string, user string) (statements []Statement) {
 	statements = []Statement{}
 	if policy == BucketPolicyNone || bucketName == "" {
 		return statements
@@ -163,7 +163,7 @@ func newBucketStatement(policy BucketPolicy, bucketName string, prefix string) (
 		statement = Statement{
 			Actions:   writeOnlyBucketActions,
 			Effect:    "Allow",
-			Principal: User{AWS: set.CreateStringSet("*")},
+			Principal: User{AWS: set.CreateStringSet(user)},
 			Resources: bucketResource,
 			Sid:       "",
 		}
@@ -174,7 +174,7 @@ func newBucketStatement(policy BucketPolicy, bucketName string, prefix string) (
 }
 
 // Returns new statements contains object actions for given policy.
-func newObjectStatement(policy BucketPolicy, bucketName string, prefix string) (statements []Statement) {
+func newObjectStatement(policy BucketPolicy, bucketName string, prefix string, user string) (statements []Statement) {
 	statements = []Statement{}
 	if policy == BucketPolicyNone || bucketName == "" {
 		return statements
@@ -182,7 +182,7 @@ func newObjectStatement(policy BucketPolicy, bucketName string, prefix string) (
 
 	statement := Statement{
 		Effect:    "Allow",
-		Principal: User{AWS: set.CreateStringSet("*")},
+		Principal: User{AWS: set.CreateStringSet(user)},
 		Resources: set.CreateStringSet(awsResourcePrefix + bucketName + "/" + prefix + "*"),
 		Sid:       "",
 	}
@@ -200,12 +200,12 @@ func newObjectStatement(policy BucketPolicy, bucketName string, prefix string) (
 }
 
 // Returns new statements for given policy, bucket and prefix.
-func newStatements(policy BucketPolicy, bucketName string, prefix string) (statements []Statement) {
+func newStatements(policy BucketPolicy, bucketName string, prefix string, user string) (statements []Statement) {
 	statements = []Statement{}
-	ns := newBucketStatement(policy, bucketName, prefix)
+	ns := newBucketStatement(policy, bucketName, prefix, user)
 	statements = append(statements, ns...)
 
-	ns = newObjectStatement(policy, bucketName, prefix)
+	ns = newObjectStatement(policy, bucketName, prefix, user)
 	statements = append(statements, ns...)
 
 	return statements
@@ -311,7 +311,7 @@ func removeBucketActions(statement Statement, prefix string, bucketResource stri
 
 // Returns statements containing removed actions/statements for given
 // policy, bucket name and prefix.
-func removeStatements(statements []Statement, bucketName string, prefix string) []Statement {
+func removeStatements(statements []Statement, bucketName string, prefix string, user string) []Statement {
 	bucketResource := awsResourcePrefix + bucketName
 	objectResource := awsResourcePrefix + bucketName + "/" + prefix + "*"
 	readOnlyInUse, writeOnlyInUse := getInUsePolicy(statements, bucketName, prefix)
@@ -321,7 +321,7 @@ func removeStatements(statements []Statement, bucketName string, prefix string) 
 	s3PrefixValues := set.NewStringSet()
 
 	for _, statement := range statements {
-		if !isValidStatement(statement, bucketName) {
+		if !isValidStatement(statement, bucketName, user) {
 			out = append(out, statement)
 			continue
 		}
@@ -340,7 +340,7 @@ func removeStatements(statements []Statement, bucketName string, prefix string) 
 			if statement.Resources.Contains(bucketResource) &&
 				statement.Actions.Intersection(readOnlyBucketActions).Equals(readOnlyBucketActions) &&
 				statement.Effect == "Allow" &&
-				statement.Principal.AWS.Contains("*") {
+				statement.Principal.AWS.Contains(user) {
 
 				if statement.Conditions != nil {
 					stringEqualsValue := statement.Conditions["StringEquals"]
@@ -377,7 +377,7 @@ func removeStatements(statements []Statement, bucketName string, prefix string) 
 		if skipBucketStatement &&
 			statement.Resources.Contains(bucketResource) &&
 			statement.Effect == "Allow" &&
-			statement.Principal.AWS.Contains("*") &&
+			statement.Principal.AWS.Contains(user) &&
 			statement.Conditions == nil {
 			continue
 		}
@@ -390,7 +390,7 @@ func removeStatements(statements []Statement, bucketName string, prefix string) 
 		if statement.Resources.Contains(bucketResource) &&
 			statement.Actions.Intersection(commonBucketActions).Equals(commonBucketActions) &&
 			statement.Effect == "Allow" &&
-			statement.Principal.AWS.Contains("*") &&
+			statement.Principal.AWS.Contains(user) &&
 			statement.Conditions == nil {
 			out = []Statement{}
 		}
@@ -452,8 +452,8 @@ func appendStatements(statements []Statement, appendStatements []Statement) []St
 }
 
 // Returns policy of given bucket statement.
-func getBucketPolicy(statement Statement, prefix string) (commonFound, readOnly, writeOnly bool) {
-	if !(statement.Effect == "Allow" && statement.Principal.AWS.Contains("*")) {
+func getBucketPolicy(statement Statement, prefix string, user string) (commonFound, readOnly, writeOnly bool) {
+	if !(statement.Effect == "Allow" && statement.Principal.AWS.Contains(user)) {
 		return commonFound, readOnly, writeOnly
 	}
 
@@ -493,9 +493,9 @@ func getBucketPolicy(statement Statement, prefix string) (commonFound, readOnly,
 }
 
 // Returns policy of given object statement.
-func getObjectPolicy(statement Statement) (readOnly bool, writeOnly bool) {
+func getObjectPolicy(statement Statement, user string) (readOnly bool, writeOnly bool) {
 	if statement.Effect == "Allow" &&
-		statement.Principal.AWS.Contains("*") &&
+		statement.Principal.AWS.Contains(user) &&
 		statement.Conditions == nil {
 		if statement.Actions.Intersection(readOnlyObjectActions).Equals(readOnlyObjectActions) {
 			readOnly = true
@@ -509,7 +509,7 @@ func getObjectPolicy(statement Statement) (readOnly bool, writeOnly bool) {
 }
 
 // GetPolicy - Returns policy of given bucket name, prefix in given statements.
-func GetPolicy(statements []Statement, bucketName string, prefix string) BucketPolicy {
+func GetPolicy(statements []Statement, bucketName string, prefix string, user string) BucketPolicy {
 	bucketResource := awsResourcePrefix + bucketName
 	objectResource := awsResourcePrefix + bucketName + "/" + prefix + "*"
 
@@ -529,7 +529,7 @@ func GetPolicy(statements []Statement, bucketName string, prefix string) BucketP
 		}
 
 		if !matchedObjResources.IsEmpty() {
-			readOnly, writeOnly := getObjectPolicy(s)
+			readOnly, writeOnly := getObjectPolicy(s, user)
 			for resource := range matchedObjResources {
 				if len(matchedResource) < len(resource) {
 					objReadOnly = readOnly
@@ -542,7 +542,7 @@ func GetPolicy(statements []Statement, bucketName string, prefix string) BucketP
 				}
 			}
 		} else if s.Resources.Contains(bucketResource) {
-			commonFound, readOnly, writeOnly := getBucketPolicy(s, prefix)
+			commonFound, readOnly, writeOnly := getBucketPolicy(s, prefix, user)
 			bucketCommonFound = bucketCommonFound || commonFound
 			bucketReadOnly = bucketReadOnly || readOnly
 			bucketWriteOnly = bucketWriteOnly || writeOnly
@@ -564,7 +564,7 @@ func GetPolicy(statements []Statement, bucketName string, prefix string) BucketP
 }
 
 // GetPolicies - returns a map of policies rules of given bucket name, prefix in given statements.
-func GetPolicies(statements []Statement, bucketName string) map[string]BucketPolicy {
+func GetPolicies(statements []Statement, bucketName string, user string) map[string]BucketPolicy {
 	policyRules := map[string]BucketPolicy{}
 	objResources := set.NewStringSet()
 	// Search all resources related to objects policy
@@ -584,18 +584,18 @@ func GetPolicies(statements []Statement, bucketName string) map[string]BucketPol
 			asterisk = "*"
 		}
 		objectPath := r[len(awsResourcePrefix+bucketName)+1:]
-		p := GetPolicy(statements, bucketName, objectPath)
+		p := GetPolicy(statements, bucketName, objectPath, user)
 		policyRules[bucketName+"/"+objectPath+asterisk] = p
 	}
 	return policyRules
 }
 
 // SetPolicy - Returns new statements containing policy of given bucket name and prefix are appended.
-func SetPolicy(statements []Statement, policy BucketPolicy, bucketName string, prefix string) []Statement {
-	out := removeStatements(statements, bucketName, prefix)
+func SetPolicy(statements []Statement, policy BucketPolicy, bucketName string, prefix string, user string) []Statement {
+	out := removeStatements(statements, bucketName, prefix, user)
 	// fmt.Println("out = ")
 	// printstatement(out)
-	ns := newStatements(policy, bucketName, prefix)
+	ns := newStatements(policy, bucketName, prefix, user)
 	// fmt.Println("ns = ")
 	// printstatement(ns)
 
